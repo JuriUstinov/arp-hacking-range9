@@ -1,0 +1,23 @@
+- hosts: all
+  become: true
+  roles:
+    - role: user-access
+      user_access_username: user
+      user_access_password: Password123
+      user_access_sudo: True
+    - role: common
+
+- hosts: server
+  become: true
+  roles:
+    - server
+
+- hosts: client
+  become: true
+  roles:
+    - client
+
+- hosts: home
+  become: true
+  roles:
+    - kali
