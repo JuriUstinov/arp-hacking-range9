@@ -1,0 +1,54 @@
+- name: Install base packages
+  apt:
+    name:
+      - sudo
+      - vim
+      - tree
+      - curl
+      - nftables
+      - openssh-server
+      - cron
+      - python3
+    state: present
+    update_cache: true
+
+- name: Enable and start ssh
+  systemd:
+    name: ssh
+    enabled: true
+    state: started
+
+- name: Enable and start cron
+  systemd:
+    name: cron
+    enabled: true
+    state: started
+
+- name: Create user
+  user:
+    name: "{{ lab_user }}"
+    shell: /bin/bash
+    create_home: true
+    groups: sudo
+    append: true
+
+- name: Set user password
+  user:
+    name: "{{ lab_user }}"
+    password: "{{ lab_password | password_hash('sha512') }}"
+    update_password: on_create
+
+- name: Allow passwordless sudo for user
+  copy:
+    dest: /etc/sudoers.d/{{ lab_user }}
+    content: "{{ lab_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Create .ssh dir
+  file:
+    path: "/home/{{ lab_user }}/.ssh"
+    state: directory
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: "0700"
