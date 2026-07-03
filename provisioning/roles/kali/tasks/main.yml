@@ -1,0 +1,19 @@
+- name: Install attacker tools
+  apt:
+    name:
+      - wireshark
+      - tcpdump
+      - arping
+      - net-tools
+      - iproute2
+      - curl
+      - nmap
+    state: present
+    update_cache: true
+
+- name: Allow kali user to use sudo without a password
+  copy:
+    content: "kali ALL=(ALL) NOPASSWD:ALL\n"
+    dest: /etc/sudoers.d/kali
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
