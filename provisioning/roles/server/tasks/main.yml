@@ -1,0 +1,187 @@
+- name: Install attacker tools
+  apt:
+    name:
+      - wireshark
+      - tcpdump
+      - arping
+      - net-tools
+      - iproute2
+      - curl
+      - nmap
+    state: present
+    update_cache: true
+
+- name: Configure network
+  copy:
+    dest: /etc/network/interfaces
+    content: |
+      source /etc/network/interfaces.d/*
+
+      auto lo
+      iface lo inet loopback
+
+      allow-hotplug enp0s3
+      iface enp0s3 inet dhcp
+
+      allow-hotplug enp0s8
+      iface enp0s8 inet static
+      address {{ server_ip }}/24
+
+- name: Create lab directory
+  file:
+    path: /opt/WiSpi
+    state: directory
+    mode: "0755"
+
+# --- NEU: SSH-Verzeichnis und authorized_keys erstellen ---
+- name: Ensure .ssh directory exists for user
+  file:
+    path: /home/user/.ssh
+    state: directory
+    owner: user
+    group: user
+    mode: "0700"
+
+- name: Create authorized_keys file
+  copy:
+    dest: /home/user/.ssh/authorized_keys
+    owner: user
+    group: user
+    mode: "0600"
+# ---------------------------------------------------------
+
+- name: Install flag generator
+  copy:
+    dest: /opt/WiSpi/flag_generator.sh
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      echo -n $(head -1 /etc/profile | cut -c11) 'lag' $(date +"%H:%M") | md5sum | awk '{print $1}' > /home/user/flag.txt
+      echo -n $(date +"%H:%M") | /usr/bin/base64 >> /home/user/flag.txt
+      echo "{{ flag_text }}" >> /home/user/flag.txt
+
+- name: Install root generator
+  copy:
+    dest: /opt/WiSpi/root_generator.sh
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      echo -n $(head -1 /etc/profile | cut -c9) 'oot' $(date +"%H:%M") | md5sum | awk '{print $1}' > /root.txt
+      echo -n $(date +"%H:%M") | /usr/bin/base64 >> /root.txt
+
+- name: Install simple web server with PUT support
+  copy:
+    dest: /opt/WiSpi/server.py
+    mode: "0755"
+    content: |
+      #!/#!/usr/bin/env python3
+      from http.server import SimpleHTTPRequestHandler, HTTPServer
+      import os
+
+      class PUTRequestHandler(SimpleHTTPRequestHandler):
+          def do_PUT(self):
+              # Ermittelt den Pfad, an den die Datei geschrieben werden soll
+              path = self.translate_path(self.path)
+              
+              # Holt die Länge der hochzuladenden Daten aus dem Header
+              length = int(self.headers['Content-Length'])
+              
+              try:
+                  # Erstellt die Ordnerstruktur, falls sie noch nicht existiert
+                  os.makedirs(os.path.dirname(path), exist_ok=True)
+                  
+                  # Schreibt die Daten in die Datei
+                  with open(path, 'wb') as f:
+                      f.write(self.rfile.read(length))
+                  
+                  # Sendet eine Erfolgsmeldung zurück (201 Created)
+                  self.send_response(201)
+                  self.end_headers()
+                  self.wfile.write(b"File created/updated successfully.\n")
+              except Exception as e:
+                  # Fehlerbehandlung (500 Internal Server Error)
+                  self.send_response(500)
+                  self.end_headers()
+                  self.wfile.write(f"Error: {str(e)}\n".encode())
+
+      # Wechselt in das gewünschte Verzeichnis
+      os.chdir("/home/user")
+      
+      # Startet den Server mit unserem neuen Handler
+      HTTPServer(("0.0.0.0", 80), PUTRequestHandler).serve_forever()
+
+- name: Configure nftables
+  copy:
+    dest: /etc/nftables.conf
+    mode: "0644"
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy accept;
+
+          ct state related,established accept;
+          iif lo accept;
+
+          icmp type echo-request ether saddr != {{ client_mac }} counter reject with icmpx type port-unreachable;
+          tcp dport 80 ether saddr != {{ client_mac }} counter reject;
+          tcp dport 22 counter accept;
+        }
+
+        chain forward {
+          type filter hook forward priority 0; policy drop;
+        }
+
+        chain output {
+          type filter hook output priority 0; policy drop;
+          ct state related,established accept;
+          oif lo accept;
+          icmp type echo-request counter accept;
+        }
+      }
+
+- name: Enable nftables
+  systemd:
+    name: nftables
+    enabled: true
+    state: restarted
+
+- name: Add cron jobs for generators
+  cron:
+    name: "{{ item.name }}"
+    user: root
+    minute: "{{ item.minute }}"
+    job: "{{ item.job }}"
+  loop:
+    - { name: "flag generator", minute: "*/1", job: "/opt/WiSpi/flag_generator.sh" }
+    - { name: "root generator", minute: "*/1", job: "/opt/WiSpi/root_generator.sh" }
+
+- name: Install web server systemd unit
+  copy:
+    dest: /etc/systemd/system/wispi-web.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=WiSpi Web Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory=/home/user
+      ExecStart=/usr/bin/python3 /opt/WiSpi/server.py 80
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: true
+
+- name: Enable and start web server
+  systemd:
+    name: wispi-web
+    enabled: true
+    state: started
