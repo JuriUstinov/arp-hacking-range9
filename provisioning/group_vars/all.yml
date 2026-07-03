@@ -1,0 +1,6 @@
+lab_user: user
+lab_password: "WiSpi23_u0"
+server_ip: "10.10.30.7"
+client_ip: "10.10.30.6"
+client_mac: "1a:2b:3c:4d:5e:6f"
+flag_text: "Wie funktioniert ssh ohne Passworteingabe?"
