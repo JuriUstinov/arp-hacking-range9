@@ -1,0 +1,109 @@
+- name: Install attacker tools
+  apt:
+    name:
+      - wireshark
+      - tcpdump
+      - arping
+      - net-tools
+      - iproute2
+      - curl
+      - nmap
+    state: present
+    update_cache: true
+
+- name: Configure network
+  copy:
+    dest: /etc/network/interfaces
+    content: |
+      source /etc/network/interfaces.d/*
+
+      auto lo
+      iface lo inet loopback
+
+      allow-hotplug enp0s3
+      iface enp0s3 inet dhcp
+
+      # Auf eth1 geändert und auf 'auto' gesetzt
+      auto eth1
+      iface eth1 inet static
+      address {{ client_ip }}/24
+      hwaddress ether {{ client_mac }}
+  register: network_config
+
+- name: Restart eth1 to apply new MAC address
+  shell: ifdown eth1 && ifup eth1
+  when: network_config.changed
+  async: 10
+  poll: 0
+  ignore_unreachable: true
+
+- name: Configure nftables
+  copy:
+    dest: /etc/nftables.conf
+    mode: "0644"
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+
+      table inet filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          ct state related,established accept;
+          iif lo accept;
+          tcp dport 22 counter accept;
+          icmp type echo-request counter accept;
+        }
+
+        chain forward {
+          type filter hook forward priority 0; policy drop;
+        }
+
+        chain output {
+          type filter hook output priority 0; policy drop;
+          ct state related,established accept;
+          oif lo accept;
+          icmp type echo-request accept;
+          tcp dport 80 counter accept;
+        }
+      }
+
+- name: Enable nftables
+  systemd:
+    name: nftables
+    enabled: true
+    state: restarted
+
+- name: Install traffic generator script on client
+  copy:
+    dest: /opt/traffic_gen.sh
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      while true; do
+        curl -s http://10.10.30.7/flag.txt > /dev/null
+        sleep 5
+      done
+
+- name: Create systemd service for traffic generator
+  copy:
+    dest: /etc/systemd/system/traffic-gen.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Simulate Client Traffic to Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/bin/bash /opt/traffic_gen.sh
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start traffic generator service
+  systemd:
+    name: traffic-gen
+    state: started
+    enabled: true
+    daemon_reload: true
